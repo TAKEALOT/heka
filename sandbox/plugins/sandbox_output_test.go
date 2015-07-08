@@ -16,16 +16,16 @@ package plugins
 
 import (
 	"errors"
-	"fmt"
+	"io/ioutil"
+	"os"
+	"time"
+
 	"github.com/mozilla-services/heka/pipeline"
 	ts "github.com/mozilla-services/heka/pipeline/testsupport"
 	plugins_ts "github.com/mozilla-services/heka/plugins/testsupport"
 	"github.com/mozilla-services/heka/sandbox"
 	"github.com/rafrombrc/gomock/gomock"
 	gs "github.com/rafrombrc/gospec/src/gospec"
-	"io/ioutil"
-	"os"
-	"time"
 )
 
 func OutputSpec(c gs.Context) {
@@ -48,13 +48,14 @@ func OutputSpec(c gs.Context) {
 		pack := pipeline.NewPipelinePack(supply)
 		data := "1376389920 debug id=2321 url=example.com item=1"
 		pack.Message.SetPayload(data)
-		err := output.Init(conf)
-		c.Expect(err, gs.IsNil)
 
 		oth.MockOutputRunner.EXPECT().InChan().Return(inChan)
+		oth.MockOutputRunner.EXPECT().UpdateCursor("").AnyTimes()
 		oth.MockOutputRunner.EXPECT().Ticker().Return(timer)
 
 		c.Specify("writes a payload to file", func() {
+			err := output.Init(conf)
+			c.Expect(err, gs.IsNil)
 			inChan <- pack
 			close(inChan)
 			err = output.Run(oth.MockOutputRunner, oth.MockHelper)
@@ -73,16 +74,23 @@ func OutputSpec(c gs.Context) {
 		})
 
 		c.Specify("failure processing data", func() {
-			oth.MockOutputRunner.EXPECT().LogError(fmt.Errorf("failure message"))
+			err := output.Init(conf)
+			c.Expect(err, gs.IsNil)
 			pack.Message.SetPayload("FAILURE")
+			pack.BufferedPack = true
+			pack.DelivErrChan = make(chan error, 1)
 			inChan <- pack
 			close(inChan)
 			err = output.Run(oth.MockOutputRunner, oth.MockHelper)
 			c.Assume(err, gs.IsNil)
 			c.Expect(output.processMessageFailures, gs.Equals, int64(1))
+			err = <-pack.DelivErrChan
+			c.Expect(err.Error(), gs.Equals, "failure message")
 		})
 
 		c.Specify("user abort processing data", func() {
+			err := output.Init(conf)
+			c.Expect(err, gs.IsNil)
 			e := errors.New("FATAL: user abort")
 			pack.Message.SetPayload("USERABORT")
 			inChan <- pack
@@ -91,6 +99,8 @@ func OutputSpec(c gs.Context) {
 		})
 
 		c.Specify("fatal error processing data", func() {
+			err := output.Init(conf)
+			c.Expect(err, gs.IsNil)
 			pack.Message.SetPayload("FATAL")
 			inChan <- pack
 			err = output.Run(oth.MockOutputRunner, oth.MockHelper)
@@ -98,7 +108,18 @@ func OutputSpec(c gs.Context) {
 		})
 
 		c.Specify("fatal error in timer_event", func() {
+			err := output.Init(conf)
+			c.Expect(err, gs.IsNil)
 			timer <- time.Now()
+			err = output.Run(oth.MockOutputRunner, oth.MockHelper)
+			c.Expect(err, gs.Not(gs.IsNil))
+		})
+
+		c.Specify("fatal error in shutdown timer_event", func() {
+			conf.TimerEventOnShutdown = true
+			err := output.Init(conf)
+			c.Expect(err, gs.IsNil)
+			close(inChan)
 			err = output.Run(oth.MockOutputRunner, oth.MockHelper)
 			c.Expect(err, gs.Not(gs.IsNil))
 		})

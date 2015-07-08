@@ -17,12 +17,6 @@ package file
 
 import (
 	"fmt"
-	. "github.com/mozilla-services/heka/pipeline"
-	pipeline_ts "github.com/mozilla-services/heka/pipeline/testsupport"
-	"github.com/mozilla-services/heka/plugins"
-	plugins_ts "github.com/mozilla-services/heka/plugins/testsupport"
-	"github.com/rafrombrc/gomock/gomock"
-	gs "github.com/rafrombrc/gospec/src/gospec"
 	"io/ioutil"
 	"os"
 	"os/user"
@@ -30,6 +24,13 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	. "github.com/mozilla-services/heka/pipeline"
+	pipeline_ts "github.com/mozilla-services/heka/pipeline/testsupport"
+	"github.com/mozilla-services/heka/plugins"
+	plugins_ts "github.com/mozilla-services/heka/plugins/testsupport"
+	"github.com/rafrombrc/gomock/gomock"
+	gs "github.com/rafrombrc/gospec/src/gospec"
 )
 
 func FileOutputSpec(c gs.Context) {
@@ -59,7 +60,7 @@ func FileOutputSpec(c gs.Context) {
 		msg := pipeline_ts.GetTestMessage()
 		pack := NewPipelinePack(pConfig.InputRecycleChan())
 		pack.Message = msg
-		pack.Decoded = true
+		pack.QueueCursor = "queuecursor"
 
 		errChan := make(chan error, 1)
 
@@ -106,6 +107,36 @@ func FileOutputSpec(c gs.Context) {
 			})
 		})
 
+		c.Specify("tests rotation of files", func() {
+			config.Path = "%Y-%m-%d"
+			rotateChan := make(chan time.Time)
+			closingChan := make(chan struct{})
+
+			err := fileOutput.Init(config)
+			defer fileOutput.file.Close()
+
+			c.Assume(err, gs.IsNil)
+
+			fileOutput.rotateChan = rotateChan
+			fileOutput.closing = closingChan
+
+			fileOutput.startRotateNotifier()
+
+			go fileOutput.committer(oth.MockOutputRunner, errChan)
+
+			c.Assume(fileOutput.path, gs.Equals, time.Now().Format("2006-01-02"))
+
+			futureDuration, _ := time.ParseDuration("24h")
+			futureNow := time.Now().Add(futureDuration)
+
+			rotateChan <- futureNow
+
+			c.Assume(fileOutput.path, gs.Equals, futureNow.Format("2006-01-02"))
+
+			close(inChan)
+			close(fileOutput.batchChan)
+		})
+
 		c.Specify("processes incoming messages", func() {
 			err := fileOutput.Init(config)
 			c.Assume(err, gs.IsNil)
@@ -119,12 +150,19 @@ func FileOutputSpec(c gs.Context) {
 			inChan <- pack
 			close(inChan)
 			outBatch := <-fileOutput.batchChan
-			c.Expect(string(outBatch), gs.Equals, payload)
+			c.Expect(string(outBatch.data), gs.Equals, payload)
+			c.Expect(outBatch.cursor, gs.Equals, pack.QueueCursor)
 		})
 
 		c.Specify("commits to a file", func() {
 			outStr := "Write me out to the log file"
 			outBytes := []byte(outStr)
+			batch := &outBatch{
+				data:   outBytes,
+				cursor: pack.QueueCursor,
+			}
+
+			oth.MockOutputRunner.EXPECT().UpdateCursor(pack.QueueCursor)
 
 			c.Specify("with default settings", func() {
 				err := fileOutput.Init(config)
@@ -135,7 +173,7 @@ func FileOutputSpec(c gs.Context) {
 
 				// Feed and close the batchChan.
 				go func() {
-					fileOutput.batchChan <- outBytes
+					fileOutput.batchChan <- batch
 					_ = <-fileOutput.backChan // clear backChan to prevent blocking.
 					close(fileOutput.batchChan)
 				}()
@@ -161,7 +199,7 @@ func FileOutputSpec(c gs.Context) {
 
 				// Feed and close the batchChan.
 				go func() {
-					fileOutput.batchChan <- outBytes
+					fileOutput.batchChan <- batch
 					_ = <-fileOutput.backChan // clear backChan to prevent blocking.
 					close(fileOutput.batchChan)
 				}()

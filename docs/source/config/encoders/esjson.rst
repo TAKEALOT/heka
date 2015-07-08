@@ -24,7 +24,7 @@ Config:
     'UUID', 'Logger', 'EnvVersion', 'Severity', a field name, or a timestamp
     format) with the use of '%{}' chars, so '%{Hostname}-%{Logger}-data' would
     add the records to an ES index called 'some.example.com-processname-data'.
-    Defaults to 'heka-%{2006.01.02}'.
+    Allows to use strftime format codes. Defaults to 'heka-%{%Y.%m.%d}'.
 - type_name (string):
     Name of ES record type to create. Supports interpolation of message field
     values (from 'Type', 'Hostname', 'Pid', 'UUID', 'Logger', 'EnvVersion',
@@ -39,8 +39,8 @@ Config:
     all dynamically specified message fields. Defaults to including all of the
     supported message fields.
 - timestamp (string):
-    Format to use for timestamps in generated ES documents. Defaults to
-    "2006-01-02T15:04:05.000Z".
+    Format to use for timestamps in generated ES documents. Allows to use
+    strftime format codes. Defaults to "%Y-%m-%dT%H:%M:%S".
 - es_index_from_timestamp (bool):
     When generating the index name use the timestamp from the message instead
     of the current time. Defaults to false.
@@ -55,6 +55,10 @@ Config:
     which contain embedded JSON objects to prevent the embedded JSON from
     being escaped as normal strings. Only supports dynamically specified
     message fields.
+- field_mappings (map[string]string):
+    Maps Heka message fields to custom ES keys. Can be used to implement a custom format
+    in ES or implement Logstash V1. The available fields are "Timestamp", "Uuid",
+    "Type", "Logger", "Severity", "Payload", "EnvVersion", "Pid" and "Hostname".
 
 Example
 
@@ -64,6 +68,9 @@ Example
     index = "%{Type}-%{2006.01.02}"
     es_index_from_timestamp = true
     type_name = "%{Type}"
+        [ESJsonEncoder.field_mappings]
+        Timestamp = "@timestamp"
+        Severity = "level"
 
     [ElasticSearchOutput]
     message_matcher = "Type == 'nginx.access'"

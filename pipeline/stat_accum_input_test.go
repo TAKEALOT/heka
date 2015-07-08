@@ -4,7 +4,7 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # The Initial Developer of the Original Code is the Mozilla Foundation.
-# Portions created by the Initial Developer are Copyright (C) 2013-2014
+# Portions created by the Initial Developer are Copyright (C) 2013-2015
 # the Initial Developer. All Rights Reserved.
 #
 # Contributor(s):
@@ -15,14 +15,15 @@
 package pipeline
 
 import (
-	"github.com/mozilla-services/heka/message"
-	ts "github.com/mozilla-services/heka/pipeline/testsupport"
-	"github.com/rafrombrc/gomock/gomock"
-	gs "github.com/rafrombrc/gospec/src/gospec"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mozilla-services/heka/message"
+	ts "github.com/mozilla-services/heka/pipeline/testsupport"
+	"github.com/rafrombrc/gomock/gomock"
+	gs "github.com/rafrombrc/gospec/src/gospec"
 )
 
 type InputTestHelper struct {
@@ -47,6 +48,14 @@ func StatAccumInputSpec(c gs.Context) {
 		config := statAccumInput.ConfigStruct().(*StatAccumInputConfig)
 		pConfig := NewPipelineConfig(nil)
 		statAccumInput.pConfig = pConfig
+
+		c.Specify("ticker interval is zero", func() {
+			config.TickerInterval = 0
+			err := statAccumInput.Init(config)
+			c.Expect(err, gs.Not(gs.IsNil))
+			expected := "TickerInterval must be greater than 0."
+			c.Expect(err.Error(), gs.Equals, expected)
+		})
 
 		c.Specify("validates that data is emitted", func() {
 			config.EmitInPayload = false
@@ -201,7 +210,7 @@ func StatAccumInputSpec(c gs.Context) {
 					tickChan <- time.Now()
 
 					injectCalled.Wait()
-					ith.Pack.Recycle()
+					ith.Pack.Recycle(nil)
 					ith.PackSupply <- ith.Pack
 					ith.MockInputRunner.EXPECT().Inject(ith.Pack)
 
@@ -227,7 +236,7 @@ func StatAccumInputSpec(c gs.Context) {
 					injectCalled.Wait()
 
 					sendTimer("sample2.timer", 10, 20)
-					ith.Pack.Recycle()
+					ith.Pack.Recycle(nil)
 					ith.PackSupply <- ith.Pack
 					ith.MockInputRunner.EXPECT().Inject(ith.Pack)
 					msg, err := finalizeSendingStats()

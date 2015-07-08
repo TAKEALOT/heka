@@ -5,15 +5,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /// @brief Sandboxed Lua execution @file
-#include <stdlib.h>
-#include <stdio.h>
 #include <ctype.h>
+#include <luasandbox.h>
+#include <luasandbox/lauxlib.h>
+#include <luasandbox/lua.h>
+#include <luasandbox/lualib.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <lua.h>
-#include <lauxlib.h>
-#include <lualib.h>
 #include <time.h>
-#include <lsb.h>
 #include "_cgo_export.h"
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -232,6 +232,7 @@ int write_message(lua_State* lua)
     luaL_argcheck(lua, fi >= 0, 4, "field index must be >= 0");
     int ai = luaL_optinteger(lua, 5, 0);
     luaL_argcheck(lua, ai >= 0, 5, "array index must be >= 0");
+    int has_ai = !lua_isnoneornil(lua, 5); // needed for deletion
 
     int result;
 
@@ -258,8 +259,12 @@ int write_message(lua_State* lua)
             (char*)value, (char*)rep, fi, ai);
         break;
     }
+    case LUA_TNIL: {
+        result = go_lua_delete_message_field(lsb_get_parent(lsb), (char*)field, fi, ai, has_ai);
+        break;
+    }
     default:
-        luaL_error(lua, "write_message() only accepts numeric, string, or boolean field values");
+        luaL_error(lua, "write_message() only accepts numeric, string, or boolean field values, or nil to delete");
     }
 
     if (result != 0) {

@@ -4,7 +4,7 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # The Initial Developer of the Original Code is the Mozilla Foundation.
-# Portions created by the Initial Developer are Copyright (C) 2013-2014
+# Portions created by the Initial Developer are Copyright (C) 2013-2015
 # the Initial Developer. All Rights Reserved.
 #
 # Contributor(s):
@@ -16,13 +16,7 @@
 package plugins
 
 import (
-	"code.google.com/p/go-uuid/uuid"
-	"code.google.com/p/gogoprotobuf/proto"
 	"fmt"
-	"github.com/mozilla-services/heka/message"
-	"github.com/mozilla-services/heka/pipeline"
-	. "github.com/mozilla-services/heka/sandbox"
-	"github.com/mozilla-services/heka/sandbox/lua"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -30,6 +24,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"code.google.com/p/go-uuid/uuid"
+	"code.google.com/p/gogoprotobuf/proto"
+	"github.com/mozilla-services/heka/message"
+	"github.com/mozilla-services/heka/pipeline"
+	. "github.com/mozilla-services/heka/sandbox"
+	"github.com/mozilla-services/heka/sandbox/lua"
 )
 
 // Decoder for converting structured/unstructured data into Heka messages.
@@ -182,11 +183,21 @@ func (s *SandboxDecoder) SetDecoderRunner(dr pipeline.DecoderRunner) {
 			original = nil // processing a new message, clear the old message
 		}
 		if len(payload_type) == 0 { // heka protobuf message
+			// write protobuf encoding to MsgBytes
+			needed := len(payload)
+			if cap(s.pack.MsgBytes) < needed {
+				s.pack.MsgBytes = make([]byte, len(payload))
+			} else {
+				s.pack.MsgBytes = s.pack.MsgBytes[:len(payload)]
+			}
+			copy(s.pack.MsgBytes, payload)
+			s.pack.TrustMsgBytes = true
+
 			if original == nil {
 				original = new(message.Message)
 				copyMessageHeaders(original, s.pack.Message) // save off the header values since unmarshal will wipe them out
 			}
-			if nil != proto.Unmarshal([]byte(payload), s.pack.Message) {
+			if nil != proto.Unmarshal(s.pack.MsgBytes, s.pack.Message) {
 				return 1
 			}
 			if s.tz != time.UTC {
@@ -208,24 +219,31 @@ func (s *SandboxDecoder) SetDecoderRunner(dr pipeline.DecoderRunner) {
 			// from the original message.
 			if s.pack.Message.Uuid == nil {
 				s.pack.Message.SetUuid(uuid.NewRandom()) // UUID should always be unique
+				s.pack.TrustMsgBytes = false
 			}
 			if s.pack.Message.Timestamp == nil {
 				s.pack.Message.SetTimestamp(original.GetTimestamp())
+				s.pack.TrustMsgBytes = false
 			}
 			if s.pack.Message.Type == nil {
 				s.pack.Message.SetType(original.GetType())
+				s.pack.TrustMsgBytes = false
 			}
 			if s.pack.Message.Hostname == nil {
 				s.pack.Message.SetHostname(original.GetHostname())
+				s.pack.TrustMsgBytes = false
 			}
 			if s.pack.Message.Logger == nil {
 				s.pack.Message.SetLogger(original.GetLogger())
+				s.pack.TrustMsgBytes = false
 			}
 			if s.pack.Message.Severity == nil {
 				s.pack.Message.SetSeverity(original.GetSeverity())
+				s.pack.TrustMsgBytes = false
 			}
 			if s.pack.Message.Pid == nil {
 				s.pack.Message.SetPid(original.GetPid())
+				s.pack.TrustMsgBytes = false
 			}
 		}
 		s.packs = append(s.packs, s.pack)
@@ -252,7 +270,9 @@ func (s *SandboxDecoder) Shutdown() {
 	}
 }
 
-func (s *SandboxDecoder) Decode(pack *pipeline.PipelinePack) (packs []*pipeline.PipelinePack, err error) {
+func (s *SandboxDecoder) Decode(pack *pipeline.PipelinePack) (packs []*pipeline.PipelinePack,
+	err error) {
+
 	if s.sb == nil {
 		err = fmt.Errorf("SandboxDecoder has been terminated")
 		return
@@ -288,7 +308,7 @@ func (s *SandboxDecoder) Decode(pack *pipeline.PipelinePack) (packs []*pipeline.
 		}
 		if len(s.packs) > 1 {
 			for _, p := range s.packs[1:] {
-				p.Recycle()
+				p.Recycle(nil)
 			}
 		}
 		s.packs = nil
@@ -303,6 +323,10 @@ func (s *SandboxDecoder) Decode(pack *pipeline.PipelinePack) (packs []*pipeline.
 	}
 	s.packs = nil
 	return
+}
+
+func (s *SandboxDecoder) EncodesMsgBytes() bool {
+	return true
 }
 
 // Satisfies the `pipeline.ReportingPlugin` interface to provide sandbox state
